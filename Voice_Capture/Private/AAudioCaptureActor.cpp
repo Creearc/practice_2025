@@ -181,7 +181,7 @@ void AAudioCaptureActor::StopRecording()
     // —охран€ем WAV; им€ может быть фиксированным, чтобы перезаписывать:
     ProcessAndSaveRecording();
 
-    // ≈сли хочешь пересоздавать AudioCapture каждый раз, очисти:
+    // ќчистка дл€ пересоздани€ AudioCapture:
     AudioCapture->RemoveFromRoot();
     AudioCapture = nullptr;
 }
@@ -230,15 +230,13 @@ void AAudioCaptureActor::OnRecognitionComplete(const FString& FilePath, int32 In
 {
     if (GEngine)
     {
-        FString Msg = FString::Printf(TEXT("«десь мог быть обработанный текст"), *FilePath, InID);
-        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, Msg);
+        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("Processed text"));
     }
 }
 
 
 void AAudioCaptureActor::OnExitButtonClicked()
 {
-    // ≈сли у вас есть логика выхода из игры через этот метод:
     if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
     {
         UKismetSystemLibrary::QuitGame(this, PC, EQuitPreference::Quit, true);
