@@ -1,5 +1,6 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
+using System.IO;
 using UnrealBuildTool;
 
 public class Voice_Capture : ModuleRules
@@ -13,6 +14,24 @@ public class Voice_Capture : ModuleRules
 			"AudioCapture", "SignalProcessing", "AudioMixer",
 			"UMG", "Slate", "SlateCore"
 		});
+
+        var VoskPath = Path.Combine(ModuleDirectory, "..", "..", "ThirdParty", "Vosk");
+
+        // 1) include-путь для vosk_api.h
+        PublicIncludePaths.Add(Path.Combine(VoskPath, "include"));
+
+        // 2) линковка статической библиотеки libvosk.lib
+        PublicAdditionalLibraries.Add(Path.Combine(VoskPath, "lib", "libvosk.lib"));
+
+        // 3) runtime‑зависимость для .dll файлов для Binaries
+        RuntimeDependencies.Add(Path.Combine(VoskPath, "lib", "libvosk.dll"), StagedFileType.NonUFS);
+        RuntimeDependencies.Add(Path.Combine(VoskPath, "lib", "libstdc++-6.dll"), StagedFileType.NonUFS);
+        RuntimeDependencies.Add(Path.Combine(VoskPath, "lib", "libgcc_s_seh-1.dll"), StagedFileType.NonUFS);
+        RuntimeDependencies.Add(Path.Combine(VoskPath, "lib", "libwinpthread-1.dll"), StagedFileType.NonUFS);
+
+
+        PublicDelayLoadDLLs.Add("libvosk.dll");
+
 
 
         PrivateDependencyModuleNames.AddRange(new string[] {  });
