@@ -1,16 +1,13 @@
-// AAudioCaptureActor.cpp
+п»ї// AAudioCaptureActor.cpp
 
 #include "AAudioCaptureActor.h"
-#include "AudioCapture.h"            // для UAudioCapture и FAudioGeneratorHandle
-#include "Sound/SampleBufferIO.h"    // для FSampleBuffer, FSoundWavePCMWriter
-#include "Kismet/GameplayStatics.h"  // для GetPlayerController
-#include "Kismet/KismetSystemLibrary.h" // для QuitGame, если нужен
-#include "Engine/Engine.h"           // для GEngine->AddOnScreenDebugMessage, UE_LOG
+#include "AudioCapture.h"
+#include "Sound/SampleBufferIO.h"
+#include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Engine/Engine.h"
 #include "Components/InputComponent.h"
 #include "Misc/Paths.h"
-#include "Misc/FileHelper.h"
-#include "UObject/ConstructorHelpers.h"
-
 
 AAudioCaptureActor::AAudioCaptureActor()
 {
@@ -20,83 +17,54 @@ AAudioCaptureActor::AAudioCaptureActor()
 
 void AAudioCaptureActor::BeginPlay()
 {
+    FString ModelDir = FPaths::ProjectDir() / TEXT("ThirdParty/Vosk/models/vosk-model-small-ru-0.22");
+    std::string ModelPathAnsi = TCHAR_TO_UTF8(*ModelDir);
+    VoiceRecognizer = MakeUnique<voice>(2, ModelPathAnsi.c_str());
+
     Super::BeginPlay();
-    UE_LOG(LogTemp, Log, TEXT("%s: BeginPlay called"), *GetName());
+    UE_LOG(LogTemp, Log, TEXT("BeginPlay called"));
 
     if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
     {
         EnableInput(PC);
-        UE_LOG(LogTemp, Log, TEXT("%s: EnableInput on PC"), *GetName());
+        UE_LOG(LogTemp, Log, TEXT("Input enabled"));
     }
 
     if (InputComponent)
     {
-        UE_LOG(LogTemp, Log, TEXT("%s: InputComponent valid, binding actions"), *GetName());
         SetupInputBindings();
+        UE_LOG(LogTemp, Log, TEXT("Input bindings set"));
     }
     else
     {
-        UE_LOG(LogTemp, Warning, TEXT("%s: InputComponent is NULL"), *GetName());
+        UE_LOG(LogTemp, Warning, TEXT("InputComponent is null!"));
     }
 
-    // Enable input для этого актора
-    if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
-    {
-        EnableInput(PC);
-    }
-
-    // Привязка действий ввода
-    if (InputComponent)
-    {
-        InputComponent->BindAction("RecordVoice", IE_Pressed, this, &AAudioCaptureActor::StartRecording);
-        InputComponent->BindAction("RecordVoice", IE_Released, this, &AAudioCaptureActor::StopRecording);
-        InputComponent->BindAction("RecordVoiceWithID", IE_Pressed, this, &AAudioCaptureActor::StartRecordingWithID);
-        InputComponent->BindAction("RecordVoiceWithID", IE_Released, this, &AAudioCaptureActor::StopRecording);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("%s: InputComponent is null in BeginPlay"), *GetName());
-    }
-
-    // Инициализируем AudioCapture один раз и открываем поток
     if (!AudioCapture)
     {
         AudioCapture = NewObject<UAudioCapture>(this);
         if (AudioCapture)
         {
-            // Предотвращаем GC; т.к. UPROPERTY хранит, часто AddToRoot не обязателен, но можно:
             AudioCapture->AddToRoot();
-
-            bool bOpened = AudioCapture->OpenDefaultAudioStream();
-            if (bOpened)
-            {
-                UE_LOG(LogTemp, Log, TEXT("%s: Audio stream opened successfully"), *GetName());
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("%s: Failed to open default audio stream"), *GetName());
-            }
+            UE_LOG(LogTemp, Log, TEXT("AudioCapture created"));
         }
         else
         {
-            UE_LOG(LogTemp, Error, TEXT("%s: Failed to create UAudioCapture object"), *GetName());
+            UE_LOG(LogTemp, Error, TEXT("Failed to create AudioCapture"));
         }
     }
 }
 
 void AAudioCaptureActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-    // Безопасно остановим захват, удалим делегат и очистим AudioCapture
     if (AudioCapture)
     {
         if (AudioCapture->IsCapturingAudio())
         {
-            // Удаляем привязанный делегат
             AudioCapture->RemoveGeneratorDelegate(AudioGenHandle);
             AudioCapture->StopCapturingAudio();
-            UE_LOG(LogTemp, Log, TEXT("%s: Audio capturing stopped in EndPlay"), *GetName());
         }
-        // Очищаем объект
+
         AudioCapture->RemoveFromRoot();
         AudioCapture = nullptr;
     }
@@ -104,134 +72,201 @@ void AAudioCaptureActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
     Super::EndPlay(EndPlayReason);
 }
 
+void AAudioCaptureActor::SetupInputBindings()
+{
+    InputComponent->BindAction("RecordVoice", IE_Pressed, this, &AAudioCaptureActor::StartRecording);
+    InputComponent->BindAction("RecordVoice", IE_Released, this, &AAudioCaptureActor::StopRecording);
+    InputComponent->BindAction("RecordVoiceWithID", IE_Pressed, this, &AAudioCaptureActor::StartRecordingWithID);
+    InputComponent->BindAction("RecordVoiceWithID", IE_Released, this, &AAudioCaptureActor::StopRecordingWithID);
+}
+
 void AAudioCaptureActor::StartRecording()
 {
     UE_LOG(LogTemp, Log, TEXT("%s: StartRecording"), *GetName());
-
-    // Сброс буфера
     AudioBuffer.Reset();
 
-    // Если ранее AudioCapture был создан, но в неактивном состоянии, можно переиспользовать
-    if (!AudioCapture)
+    if (AudioCapture)
     {
-        AudioCapture = NewObject<UAudioCapture>(this);
-        AudioCapture->AddToRoot(); // чтобы GC не удалил раньше времени
-    }
-    else
-    {
-        // Если он был занят предыдущим делегатом или состоянием, остановим его
         if (AudioCapture->IsCapturingAudio())
         {
             AudioCapture->StopCapturingAudio();
-            AudioCapture->RemoveGeneratorDelegate(AudioGenHandle);
         }
+        AudioCapture->RemoveGeneratorDelegate(AudioGenHandle);
+        AudioCapture->RemoveFromRoot();
+        AudioCapture = nullptr;
     }
 
-    // Привязываем делегат и сохраняем хендл
+    AudioCapture = NewObject<UAudioCapture>(this);
+    AudioCapture->AddToRoot();
+
+    // РР·РјРµРЅРµРЅРёРµ: Р·Р°С…РІР°С‚С‹РІР°РµРј РґР°РЅРЅС‹Рµ РІ СЃС‹СЂРѕРј РІРёРґРµ (РєР°Рє РµСЃС‚СЊ СЃ СѓСЃС‚СЂРѕР№СЃС‚РІР°)
     AudioGenHandle = AudioCapture->AddGeneratorDelegate([this](const float* InAudio, int32 NumSamples) {
         if (NumSamples > 0 && InAudio)
         {
-            float MaxAmp = 0.f;
-            for (int32 i = 0; i < NumSamples; ++i)
-            {
-                MaxAmp = FMath::Max(MaxAmp, FMath::Abs(InAudio[i]));
-            }
-            UE_LOG(LogTemp, Log, TEXT("%s: Captured %d samples, MaxAmp=%f"), *GetName(), NumSamples, MaxAmp);
             AudioBuffer.Append(InAudio, NumSamples);
         }
         });
 
-    // Если поток ещё не открыт, откроем
-    // AudioCapture->OpenDefaultAudioStream() лучше вызывать один раз в BeginPlay. 
-    // Но если нужно, можно повторно открывать:
     bool bOpened = AudioCapture->OpenDefaultAudioStream();
     if (!bOpened)
     {
-        UE_LOG(LogTemp, Warning, TEXT("%s: Failed to open audio stream in StartRecording"), *GetName());
+        UE_LOG(LogTemp, Warning, TEXT("%s: Failed to open audio stream"), *GetName());
+        AudioCapture->RemoveFromRoot();
+        AudioCapture = nullptr;
+        return;
     }
 
     AudioCapture->StartCapturingAudio();
-    UE_LOG(LogTemp, Log, TEXT("%s: AudioCapture->StartCapturingAudio() called"), *GetName());
+    UE_LOG(LogTemp, Log, TEXT("%s: Audio capturing started"), *GetName());
 }
+
 
 void AAudioCaptureActor::StartRecordingWithID()
 {
-    UE_LOG(LogTemp, Log, TEXT("%s: StartRecordingWithID"), *GetName());
-    bRecordingWithID = true;
-    RecordingID = 123; // пример
+    RecordingID = 123;
+    StartRecording();
+}
 
-    StartRecording(); // можно переиспользовать логику,
-    // или скопировать код StartRecording, но с учётом флага bRecordingWithID
+void AAudioCaptureActor::StopRecordingWithID()
+{
+    StopRecording();
 }
 
 void AAudioCaptureActor::StopRecording()
 {
     UE_LOG(LogTemp, Log, TEXT("%s: StopRecording"), *GetName());
-    if (!AudioCapture || !AudioCapture->IsCapturingAudio())
+
+    // 7. РџСЂРѕРІРµСЂРєР° РІР°Р»РёРґРЅРѕСЃС‚Рё РѕР±СЉРµРєС‚Р° РїРµСЂРµРґ РѕРїРµСЂР°С†РёСЏРјРё
+    if (!AudioCapture)
     {
-        UE_LOG(LogTemp, Warning, TEXT("%s: No active capture to stop"), *GetName());
+        UE_LOG(LogTemp, Warning, TEXT("%s: AudioCapture is null"), *GetName());
         return;
     }
 
-    // Удаляем делегат перед остановкой
-    AudioCapture->RemoveGeneratorDelegate(AudioGenHandle);
+    UE_LOG(LogTemp, Log, TEXT("%s: before stop"), *GetName());
 
-    AudioCapture->StopCapturingAudio();
+    if (AudioCapture->IsCapturingAudio())
+    {
+        AudioCapture->RemoveGeneratorDelegate(AudioGenHandle);
+        AudioCapture->StopCapturingAudio();
+    }
 
-    // Сохраняем WAV; имя может быть фиксированным, чтобы перезаписывать:
+    UE_LOG(LogTemp, Log, TEXT("%s: after stop"), *GetName());
+
+
     ProcessAndSaveRecording();
 
-    // Очистка для пересоздания AudioCapture:
-    AudioCapture->RemoveFromRoot();
-    AudioCapture = nullptr;
+    // РћС‡РёСЃС‚РёС‚СЊ Р±СѓС„РµСЂ, (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ)
+    AudioBuffer.Reset();
 }
 
 void AAudioCaptureActor::ProcessAndSaveRecording()
 {
     if (AudioBuffer.Num() == 0)
     {
-        UE_LOG(LogTemp, Warning, TEXT("%s: AudioBuffer is empty, nothing to save"), *GetName());
-        OnRecognitionComplete(); // всё равно вызвать заглушку, если нужно
+        UE_LOG(LogTemp, Warning, TEXT("%s: AudioBuffer is empty"), *GetName());
         return;
     }
 
     if (!AudioCapture)
     {
-        UE_LOG(LogTemp, Error, TEXT("%s: AudioCapture null in ProcessAndSaveRecording"), *GetName());
-        OnRecognitionComplete();
+        UE_LOG(LogTemp, Error, TEXT("%s: AudioCapture null"), *GetName());
         return;
     }
 
-    int32 NumChannels = AudioCapture->GetNumChannels();
-    int32 SampleRate = AudioCapture->GetSampleRate();
+    const int32 NumChannels = AudioCapture->GetNumChannels();
+    const int32 SampleRate = AudioCapture->GetSampleRate();
 
-    Audio::FSampleBuffer SampleBuffer(AudioBuffer.GetData(), AudioBuffer.Num(), NumChannels, SampleRate);
+    // РљСЂРёС‚РёС‡РµСЃРєРѕРµ РёР·РјРµРЅРµРЅРёРµ: РїСЂРµРѕР±СЂР°Р·РѕРІР°РЅРёРµ РІ РјРѕРЅРѕ
+    TArray<float> MonoBuffer;
+    if (NumChannels > 1)
+    {
+        const int32 NumFrames = AudioBuffer.Num() / NumChannels;
+        MonoBuffer.Reserve(NumFrames);
+
+        for (int32 i = 0; i < NumFrames; ++i)
+        {
+            float Sum = 0.0f;
+            for (int32 Channel = 0; Channel < NumChannels; ++Channel)
+            {
+                Sum += AudioBuffer[i * NumChannels + Channel];
+            }
+            MonoBuffer.Add(Sum / NumChannels);
+        }
+    }
+    else
+    {
+        MonoBuffer = AudioBuffer;
+    }
+
+    // РЎРѕР·РґР°РµРј Р±СѓС„РµСЂ СЃ 1 РєР°РЅР°Р»РѕРј (РјРѕРЅРѕ)
+    Audio::FSampleBuffer SampleBuffer(
+        MonoBuffer.GetData(),
+        MonoBuffer.Num(),
+        1,          // РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ 1 РєР°РЅР°Р»
+        SampleRate
+    );
+
     Audio::FSoundWavePCMWriter Writer;
-
-    FString FileName = TEXT("RecordedAudio.wav");
-    FString Directory = FPaths::ProjectSavedDir(); // например Saved/
+    FString FileName = TEXT("Recording.wav");
+    FString Directory = FPaths::ProjectSavedDir();
     FString OutFilePath;
-    bool bSuccess = Writer.SynchronouslyWriteToWavFile(SampleBuffer, FileName, Directory, &OutFilePath);
 
+    bool bSuccess = Writer.SynchronouslyWriteToWavFile(SampleBuffer, FileName, Directory, &OutFilePath);
     if (bSuccess)
     {
-        UE_LOG(LogTemp, Log, TEXT("%s: WAV file saved to: %s"), *GetName(), *OutFilePath);
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("WAV file saved"));
+        }
+        else
+        {
+            UE_LOG(LogTemp, Error, TEXT("GEngine is nullptr!"));
+        }
+
+        UE_LOG(LogTemp, Log, TEXT("%s: WAV file saved: %s"), *GetName(), *OutFilePath);
+        OnRecognitionComplete(OutFilePath);
+
     }
     else
     {
         UE_LOG(LogTemp, Warning, TEXT("%s: Failed to save WAV file"), *GetName());
     }
-
-    // Вызов заглушки распознавания;
-    OnRecognitionComplete();
 }
 
-void AAudioCaptureActor::OnRecognitionComplete(const FString& FilePath, int32 InID)
+void AAudioCaptureActor::OnRecognitionComplete(const FString& AudioFilePath)
 {
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("Processed text"));
-    }
+    AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, AudioFilePath]()
+        {
+            if (!VoiceRecognizer)
+            {
+                if (GEngine)
+                {
+                    GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("VoiceRecognizer not initialized"));
+                }
+                else
+                {
+                    UE_LOG(LogTemp, Error, TEXT("GEngine is nullptr!"));
+                }
+
+                UE_LOG(LogTemp, Error, TEXT("VoiceRecognizer not initialized"));
+                return;
+            }
+
+            std::string PathAnsi = TCHAR_TO_UTF8(*AudioFilePath);
+            std::string RecognitionResultStd = VoiceRecognizer->convertAudio(PathAnsi.c_str());
+            FString RecognitionResult = UTF8_TO_TCHAR(RecognitionResultStd.c_str());
+
+            // Р’РѕР·РІСЂР°С‰Р°РµРјСЃСЏ РІ РёРіСЂРѕРІРѕР№ РїРѕС‚РѕРє, С‡С‚РѕР±С‹ РІС‹РІРµСЃС‚Рё СЂРµР·СѓР»СЊС‚Р°С‚
+            AsyncTask(ENamedThreads::GameThread, [this, RecognitionResult]()
+                {
+                    UE_LOG(LogTemp, Log, TEXT("Recognition Complete: %s"), *RecognitionResult);
+                    if (GEngine)
+                    {
+                        GEngine->AddOnScreenDebugMessage(-1, 6.f, FColor::Green, RecognitionResult);
+                    }
+                });
+        });
 }
 
 
@@ -242,9 +277,3 @@ void AAudioCaptureActor::OnExitButtonClicked()
         UKismetSystemLibrary::QuitGame(this, PC, EQuitPreference::Quit, true);
     }
 }
-
-void AAudioCaptureActor::SetupInputBindings()
-{
-    // Пока можно оставить пустым
-}
-
